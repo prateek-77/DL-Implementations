@@ -36,6 +36,9 @@ class PerceiverAttention(nn.Module):
         self.kv = nn.Linear(dim, hidden_dim*2, bias=False)
         self.out = nn.Linear(hidden_dim, dim, bias=False)
 
+
+    # x: B x n x D (media)
+    # latents: B x n_l x D
     def forward(self, x, latents):
 
         x = self.norm_media(x)
@@ -70,6 +73,7 @@ class PerceiverAttention(nn.Module):
         return out
 
 # Don't allow frames and time steps
+# Current Implementation has frames=1, time steps=1 [Only supports images]
 
 class PerceiverSampler(nn.Module):
 
@@ -121,7 +125,7 @@ class MaskedCrossAttention(nn.Module):
     
     def __init__(self,
                  dim,
-                 dim_visual,
+                 dim_media,
                  dim_head,
                  heads,
                  only_attend_immediate_media=True
@@ -136,7 +140,7 @@ class MaskedCrossAttention(nn.Module):
         
         hidden_dim = dim_head * heads
         self.to_q = nn.Linear(dim, hidden_dim, bias=False)
-        self.to_kv = nn.Linear(dim_visual, 2 * hidden_dim, bias=False)
+        self.to_kv = nn.Linear(dim_media, 2 * hidden_dim, bias=False)
         self.to_out = nn.Linear(hidden_dim, dim, bias=False)
         
         self.scale = math.sqrt(dim_head)
@@ -165,7 +169,7 @@ class MaskedCrossAttention(nn.Module):
         media_time = torch.arange(T_img, device=x.device) + 1 # T_img
         text_time = media_locations.cumsum(dim=1) # B x T_text
         
-        media_time = media_time.repeat(n).reshape(1, 1, 1, n * T_img)
+        media_time = media_time.repeat_interleave(n).reshape(1, 1, 1, n * T_img)
         text_time = text_time.reshape(B, 1, T_text, 1)
         
         mask_text_img = media_time == text_time
@@ -183,6 +187,29 @@ class MaskedCrossAttention(nn.Module):
         out = self.to_out(out)
         
         return out
+    
+class GatedCrossAttentionBlock(nn.Module):
+    
+    def __init__(self,
+                 dim,
+                 dim_media,
+                 dim_head,
+                 heads,
+                 ff_mult,
+                 only_attend_immediate_media=True
+                 ):
+        super().__init__()
+        self.alpha_xattn = nn.Parameter(torch.zeros(1))
+        self.alpha_dense = nn.Parameter(torch.zeros(1))
+        self.cross_attn = MaskedCrossAttention(dim, dim_media, dim_head, heads, only_attend_immediate_media)
+        self.ff = FeedForward(dim, ff_mult)
+        
+    def forward(self, x, media, media_locations):
+        
+        x = x + torch.tanh(self.alpha_xattn) * self.cross_attn(x, media, media_locations)
+        x = x + torch.tanh(self.alpha_xattn) * self.ff(x)
+        
+        return x
         
 
 if __name__ == "__main__":
@@ -195,6 +222,9 @@ if __name__ == "__main__":
     z = torch.randn((2, 4))
     MCA = MaskedCrossAttention(120, 120, 10, 6, True)
     MCA(x, y, z)
+    
+    GCA = GatedCrossAttention(120, 120, 10, 6, True)
+    GCA(x, y, z)
 
 
 # input tensor has shape B x T x f x v x D
