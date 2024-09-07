@@ -24,6 +24,9 @@ class PerceiverAttention(nn.Module):
     def __init__(self, dim, dim_head, heads):
         super().__init__()
 
+        self.heads = heads
+        self.dim_head = dim_head
+        self.scale = math.sqrt(dim_head)
         hidden_dim = dim_head * heads
 
         self.norm_media = nn.LayerNorm(dim)
@@ -32,10 +35,6 @@ class PerceiverAttention(nn.Module):
         self.q = nn.Linear(dim, hidden_dim, bias=False)
         self.kv = nn.Linear(dim, hidden_dim*2, bias=False)
         self.out = nn.Linear(hidden_dim, dim, bias=False)
-
-        self.heads = heads
-        self.dim_head = dim_head
-        self.scale = math.sqrt(self.d)
 
     def forward(self, x, latents):
 
@@ -60,7 +59,7 @@ class PerceiverAttention(nn.Module):
 
         attn = query @ key.transpose(-1, -2)
         # Softmax Stability
-        attn = attn - attn.max(attn, dim=-1, keepdim=True).detach()
+        attn = attn - torch.amax(attn, dim=-1, keepdim=True).detach()
         attn_s = F.softmax(attn, dim=-1) / self.scale
         out = attn_s @ value
 
@@ -70,6 +69,7 @@ class PerceiverAttention(nn.Module):
 
         return out
 
+# Don't allow frames and time steps
 
 class PerceiverSampler(nn.Module):
 
@@ -84,8 +84,7 @@ class PerceiverSampler(nn.Module):
                  ff_mult,):
 
         super().__init__()
-        self.depth = depth
-        self.learned_latent_queries = nn.Parameter(torch.randn(num_latents, dim))
+        self.latents = nn.Parameter(torch.randn(num_latents, dim))
         
         self.layers = nn.ModuleList([])
         
@@ -106,23 +105,96 @@ class PerceiverSampler(nn.Module):
         shape of x : B x T x F x v x D
         """
         
-        B, T, F, v, D = x.shape
-        
+        B, *_, D = x.shape
         x = x.reshape(B, -1, D)
         
         latents = self.latents.unsqueeze(0).repeat(B, 1, 1)
         
         for attn, ff in self.layers:
-            latents += attn(x, latents)
-            latents += ff(latents)
+            latents = attn(x, latents) + latents
+            latents = ff(latents) + latents
             
         return self.norm(latents)
     
 
+class MaskedCrossAttention(nn.Module):
+    
+    def __init__(self,
+                 dim,
+                 dim_visual,
+                 dim_head,
+                 heads,
+                 only_attend_immediate_media=True
+                 ):
+        
+        super().__init__()
+        self.dim = dim
+        self.dim_head = dim_head
+        self.heads = heads
+        
+        self.norm = nn.LayerNorm(dim)
+        
+        hidden_dim = dim_head * heads
+        self.to_q = nn.Linear(dim, hidden_dim, bias=False)
+        self.to_kv = nn.Linear(dim_visual, 2 * hidden_dim, bias=False)
+        self.to_out = nn.Linear(hidden_dim, dim, bias=False)
+        
+        self.scale = math.sqrt(dim_head)
+    
+    # x shape: B x T_text x D_t
+    # media shape: B x T_img x n x D_media
+    
+    def forward(self, x, media, media_locations):
+        
+        B, T_text, _ = x.shape
+        _, T_img, n, D_media = media.shape
+        
+        x = self.norm(x)
+        media = media.reshape(B, -1, D_media)
+        
+        query = self.to_q(x)
+        key_value = self.to_kv(media)
+        key, value = key_value.chunk(2, dim=-1)
+        
+        query = query.reshape(B, T_text, self.heads, self.dim_head).permute(0, 2, 1, 3)
+        key = key.reshape(B, T_img * n, self.heads, self.dim_head).permute(0, 2, 1, 3)
+        value = value.reshape(B, T_img * n, self.heads, self.dim_head).permute(0, 2, 1, 3)
+        
+        attn = query @ key.transpose(-2, -1) # B x h x T_text x (T_img * n)
+        
+        media_time = torch.arange(T_img, device=x.device) + 1 # T_img
+        text_time = media_locations.cumsum(dim=1) # B x T_text
+        
+        media_time = media_time.repeat(n).reshape(1, 1, 1, n * T_img)
+        text_time = text_time.reshape(B, 1, T_text, 1)
+        
+        mask_text_img = media_time == text_time
+        
+        attn.masked_fill(~mask_text_img, -torch.inf)
+        attn = attn - attn.amax(dim=-1, keepdim=True).detach()
+        attn = F.softmax(attn, dim=-1) / self.scale
+        
+        # Zeroing out attention for text tokens that have no preceding media
+        attn.masked_fill(text_time==0, 0.)
+        
+        out = attn @ value # B x h x T_text x dim_head
+        out = out.permute(0, 2, 1, 3).reshape(B, T_text, -1)
+        
+        out = self.to_out(out)
+        
+        return out
+        
+
 if __name__ == "__main__":
     x = torch.randn((2, 1, 1, 4, 120))
-    PS = PerceiverSampler(120, 60, 6, 2)
+    PS = PerceiverSampler(120, 6, 10, 6, 2, 1, 1, 4)
     PS(x)
+    
+    x = torch.randn((2, 4, 120))
+    y = torch.randn((2, 2, 4, 120))
+    z = torch.randn((2, 4))
+    MCA = MaskedCrossAttention(120, 120, 10, 6, True)
+    MCA(x, y, z)
 
 
 # input tensor has shape B x T x f x v x D
