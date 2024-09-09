@@ -18,6 +18,8 @@ class FlamingoLayer(nn.Module):
         self.media_x = None
         self.media_locations = None
         
+        self.use_cached_media = False
+        
     def is_conditioned(self):
         return (self.media_x and self.media_locations)
         
@@ -27,7 +29,8 @@ class FlamingoLayer(nn.Module):
     def condition_media_location(self, media_locations):
         self.media_locations = media_locations
         
-    # Use cached media not implemented yet
+    def condition_use_cached_media(self, use_cached_media):
+        self.use_cached_media = use_cached_media
         
     def forward(self, x, attention_mask=None, **decoder_layer_kwargs):
         
@@ -35,15 +38,13 @@ class FlamingoLayer(nn.Module):
             if (not self.is_conditioned()):
                 raise ValueError("Condition the FlamingoLayer with media and media locations first")
             
-            x = self.gated_cross_attn_layer(x, self.media_x, self.media_locations, use_cached_media=False)
+            x = self.gated_cross_attn_layer(x, self.media_x, self.media_locations, use_cached_media=self.use_cached_media)
             
         x = self.decoder_layer(x, attention_mask, **decoder_layer_kwargs)
         
         return x
     
 # Mixin Class that extends Language Encoder's Class with Flamingo capabilities like GCA layer
-
-# Media Caching not yet implemented.
 
 class FlamingoLMMixin(nn.Module):
     
@@ -65,7 +66,7 @@ class FlamingoLMMixin(nn.Module):
                       x_dim_size, 
                       media_dim_size, 
                       cross_attn_every_n_layer, 
-                      gradient_checkpointing):
+                      gradient_checkpointing=False):
         
         self.original_decoder_layers = self._get_decoder_layers()
         self.gated_cross_attn_layers = nn.ModuleList([])
@@ -78,15 +79,18 @@ class FlamingoLMMixin(nn.Module):
             )
             
         self.media_token_id = media_token_id
-        self.gradient_checkpointing = False
+        self.gradient_checkpointing = gradient_checkpointing
+
         self.init_flamingo_layers()
+        self.initialized_flamingo = True
+        self._use_cached_media = False
         
     def init_flamingo_layers(self):
         new_flamingo_decoder_layers = nn.ModuleList([])
         
         for layer_idx, layer in enumerate(self.gated_cross_attn_layers):
             new_flamingo_decoder_layers.append([
-                    FlamingoLayer(layer, self.original_decoder_layers[layer_idx], self.gradient_checkpointing)
+                FlamingoLayer(layer, self.original_decoder_layers[layer_idx], self.gradient_checkpointing)
             ])
             
         self._set_decoder_layers(new_flamingo_decoder_layers)
@@ -95,10 +99,31 @@ class FlamingoLMMixin(nn.Module):
         
         media_locations = input_ids == self.media_token_id
         
+        use_cached_media_locations = False
+        
+        if (self._use_cached_media
+            and self.is_conditioned() # Important flag for caching decision in subsequent passes of generate().
+            and not media_locations.any()):
+            use_cached_media_locations = True
+        
         for flamingo_layer in self._get_decoder_layers():
-            flamingo_layer.condition_media_locations(media_locations)
+            if (not use_cached_media_locations):
+                flamingo_layer.condition_media_locations(media_locations)
+            flamingo_layer.condition_use_cached_media(use_cached_media_locations)
             
         kwargs['input_ids'] = input_ids
         kwargs['attention_mask'] = attention_mask
         
         return super().forward(**kwargs) # Calls the original LangEncoder class' forward method (Python MRO)
+    
+    def is_conditioned(self):
+        for flamingo_layer in self._get_decoder_layers():
+            if (not flamingo_layer.is_conditioned()):
+                return False
+        return True
+    
+    def clear_conditioned_layers(self):
+        for flamingo_layer in self._get_decoder_layers():
+            flamingo_layer.condition_media_x(None)
+            flamingo_layer.condition_media_location(None)
+            flamingo_layer.condition_use_cached_media(False)

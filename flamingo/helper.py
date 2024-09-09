@@ -12,8 +12,7 @@ class FeedForward(nn.Module):
         self.ff = nn.Sequential(nn.LayerNorm(dim),
                                 nn.Linear(dim, inner_dim, bias=False),
                                 nn.GELU(),
-                                nn.Linear(inner_dim, dim, bias=False)
-                                )
+                                nn.Linear(inner_dim, dim, bias=False))
 
     def forward(self, x):
         return self.ff(x)
@@ -102,7 +101,6 @@ class PerceiverSampler(nn.Module):
             
         self.norm = nn.LayerNorm(dim)
         
-        
 
     def forward(self, x):
         """
@@ -147,8 +145,10 @@ class MaskedCrossAttention(nn.Module):
     
     # x shape: B x T_text x D_t
     # media shape: B x T_img x n x D_media
+    # We use cached media during generation of new tokens:
+    # we don't have media tokens during autoregressive generation
     
-    def forward(self, x, media, media_locations):
+    def forward(self, x, media, media_locations, use_cached_media=False):
         
         B, T_text, _ = x.shape
         _, T_img, n, D_media = media.shape
@@ -168,6 +168,10 @@ class MaskedCrossAttention(nn.Module):
         
         media_time = torch.arange(T_img, device=x.device) + 1 # T_img
         text_time = media_locations.cumsum(dim=1) # B x T_text
+        
+        # Set all text tokens to attend the latest media
+        if (use_cached_media):
+            text_time = text_time.max(dim=1, keepdim=True).repeat(1, T_text)
         
         media_time = media_time.repeat_interleave(n).reshape(1, 1, 1, n * T_img)
         text_time = text_time.reshape(B, 1, T_text, 1)
@@ -204,9 +208,9 @@ class GatedCrossAttentionBlock(nn.Module):
         self.cross_attn = MaskedCrossAttention(dim, dim_media, dim_head, heads, only_attend_immediate_media)
         self.ff = FeedForward(dim, ff_mult)
         
-    def forward(self, x, media, media_locations):
+    def forward(self, x, media, media_locations, use_cached_media=False):
         
-        x = x + torch.tanh(self.alpha_xattn) * self.cross_attn(x, media, media_locations)
+        x = x + torch.tanh(self.alpha_xattn) * self.cross_attn(x, media, media_locations, use_cached_media)
         x = x + torch.tanh(self.alpha_xattn) * self.ff(x)
         
         return x
