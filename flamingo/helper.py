@@ -60,6 +60,7 @@ class PerceiverAttention(nn.Module):
                               self.dim_head).permute(0, 2, 1, 3)
 
         attn = query @ key.transpose(-1, -2)
+        
         # Softmax Stability
         attn = attn - torch.amax(attn, dim=-1, keepdim=True).detach()
         attn_s = F.softmax(attn, dim=-1) / self.scale
@@ -211,7 +212,7 @@ class GatedCrossAttentionBlock(nn.Module):
     def forward(self, x, media, media_locations, use_cached_media=False):
         
         x = x + torch.tanh(self.alpha_xattn) * self.cross_attn(x, media, media_locations, use_cached_media)
-        x = x + torch.tanh(self.alpha_xattn) * self.ff(x)
+        x = x + torch.tanh(self.alpha_dense) * self.ff(x)
         
         return x
         
@@ -227,7 +228,7 @@ if __name__ == "__main__":
     MCA = MaskedCrossAttention(120, 120, 10, 6, True)
     MCA(x, y, z)
     
-    GCA = GatedCrossAttention(120, 120, 10, 6, True)
+    GCA = GatedCrossAttentionBlock(120, 120, 10, 6, True)
     GCA(x, y, z)
 
 

@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from helper import PerceiverSampler
 
-# TODO: Complete Generate
+# TODO: Check Gradient Checkpointing
 
 class Flamingo(nn.Module):
     
@@ -10,12 +10,13 @@ class Flamingo(nn.Module):
                  vision_encoder, # OpenAI CLIP encoder
                  lang_encoder, # Assume already extended with LMMixin
                  media_token_id,
-                 eos_token_id,
+                 eoc_token_id,
                  media_dim,
                  cross_attn_every_n_layers,
                  gradient_checkpointing=False):
         
         self.media_token_id = media_token_id
+        self.eoc_token_id = eoc_token_id
         
         self.vision_encoder = vision_encoder.visual
         self.perceiver = PerceiverSampler(dim=media_dim)
@@ -25,6 +26,7 @@ class Flamingo(nn.Module):
         
         self.lang_encoder.init_flamingo(media_token_id, 
                                         self.x_dim, 
+                                        media_dim,
                                         cross_attn_every_n_layers, 
                                         gradient_checkpointing)
         
@@ -37,7 +39,7 @@ class Flamingo(nn.Module):
                 past_key_values=None,
                 use_cache=False):
         
-        if (self._use_cached_media):
+        if (self.lang_encoder._use_cached_media):
             assert media is None # Use media that is already conditioned
             assert self.lang_encoder.is_conditioned()
         
@@ -56,6 +58,31 @@ class Flamingo(nn.Module):
         if clear_conditioned_layers:
             self.lang_encoder.clear_conditioned_layers()
             
+        return output
+    
+    def generate(self, 
+                 media, 
+                 x, 
+                 attention_mask = None, 
+                 **kwargs):
+        
+        # Add beam search support
+        
+        self._encode_and_condition_media(media)
+        self.lang_encoder._use_cached_media = True
+        
+        eos_token_id = kwargs.pop('eos_token_id', self.eoc_token_id)
+        
+        output = self.lang_encoder(
+            input_ids = x,
+            attention_mask = attention_mask,
+            eos_token_id = eos_token_id,
+            **kwargs
+        )
+        
+        self.lang_encoder.clear_conditioned_layers()
+        self.lang_encoder._use_cached_media = False
+        
         return output
         
     
