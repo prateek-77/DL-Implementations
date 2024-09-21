@@ -4,6 +4,8 @@ def extend_instance(obj, mixin_class):
     base_class = obj.__class__
     base_class_name = base_class.__name__
     obj.__class__ = type(base_class_name, (mixin_class, base_class), {})
+    
+    return obj
 
 # obj 
 # attr 'model.decoder.layers'

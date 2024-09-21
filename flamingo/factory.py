@@ -8,16 +8,18 @@ from flamingo import Flamingo
 from flamingo_lm import FlamingoLMMixin
 from utils import extend_instance
 
-def create_model(
+# Understand HF generate and caching
+
+def create_model_and_transforms(
     clip_vision_encoder_path,
     clip_vision_encoder_pretrained,
     lang_encoder_path,
     tokenizer_path,
     cross_attn_every_n_layers,
-    use_local_files,
-    decoder_layers_attr_name,
-    freeze_lm_embeddings,
-    cache_dir,
+    use_local_files=True,
+    decoder_layers_attr_name=None,
+    freeze_lm_embeddings=False,
+    cache_dir="/Users/pgarg/Work/DL-Implementations/cache",
     **flamingo_kwargs):
     
     vision_encoder, _, image_processor = open_clip.create_model_and_transforms(
@@ -49,6 +51,8 @@ def create_model(
     lang_encoder.resize_token_embeddings(len(tokenizer))
     lang_encoder = extend_instance(lang_encoder, FlamingoLMMixin)
     
+    # print(lang_encoder)
+    
     if decoder_layers_attr_name is None:
         decoder_layers_attr_name = get_decoder_layers_attr_name(lang_encoder)
     
@@ -73,7 +77,7 @@ def create_model(
 def get_decoder_layers_attr_name(lang_encoder):
     lang_encoder_name = lang_encoder.__class__.__name__
     
-    for k, v in __KNOWN_DECODER_LAYERS_ATTR_NAMES:
+    for k, v in __KNOWN_DECODER_LAYERS_ATTR_NAMES.items():
         if k.lower() in lang_encoder_name.lower():
             return v
     

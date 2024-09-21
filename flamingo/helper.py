@@ -79,13 +79,13 @@ class PerceiverSampler(nn.Module):
 
     def __init__(self,
                  dim,
-                 depth,
-                 dim_head,
-                 heads,
-                 num_latents,
-                 max_num_media,
-                 max_num_frames,
-                 ff_mult,):
+                 depth=6,
+                 dim_head=64,
+                 heads=8,
+                 num_latents=64,
+                 max_num_media=None,
+                 max_num_frames=None,
+                 ff_mult=4):
 
         super().__init__()
         self.latents = nn.Parameter(torch.randn(num_latents, dim))
@@ -125,8 +125,8 @@ class MaskedCrossAttention(nn.Module):
     def __init__(self,
                  dim,
                  dim_media,
-                 dim_head,
-                 heads,
+                 dim_head=64,
+                 heads=8,
                  only_attend_immediate_media=True
                  ):
         
@@ -198,9 +198,9 @@ class GatedCrossAttentionBlock(nn.Module):
     def __init__(self,
                  dim,
                  dim_media,
-                 dim_head,
-                 heads,
-                 ff_mult,
+                 dim_head=64,
+                 heads=8,
+                 ff_mult=4,
                  only_attend_immediate_media=True
                  ):
         super().__init__()

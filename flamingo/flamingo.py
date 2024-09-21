@@ -14,6 +14,7 @@ class Flamingo(nn.Module):
                  media_dim,
                  cross_attn_every_n_layers,
                  gradient_checkpointing=False):
+        super().__init__()
         
         self.media_token_id = media_token_id
         self.eoc_token_id = eoc_token_id

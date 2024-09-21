@@ -86,12 +86,12 @@ class FlamingoLMMixin(nn.Module):
         self._use_cached_media = False
         
     def init_flamingo_layers(self):
-        new_flamingo_decoder_layers = nn.ModuleList([])
+        new_flamingo_decoder_layers = nn.ModuleList()
         
         for layer_idx, layer in enumerate(self.gated_cross_attn_layers):
-            new_flamingo_decoder_layers.append([
+            new_flamingo_decoder_layers.append(
                 FlamingoLayer(layer, self.original_decoder_layers[layer_idx], self.gradient_checkpointing)
-            ])
+            )
             
         self._set_decoder_layers(new_flamingo_decoder_layers)
         
