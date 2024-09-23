@@ -21,12 +21,12 @@ class FlamingoLayer(nn.Module):
         self.use_cached_media = False
         
     def is_conditioned(self):
-        return (self.media_x and self.media_locations)
+        return self.media_x is not None and self.media_locations is not None
         
     def condition_media_x(self, media_x):
         self.media_x = media_x
         
-    def condition_media_location(self, media_locations):
+    def condition_media_locations(self, media_locations):
         self.media_locations = media_locations
         
     def condition_use_cached_media(self, use_cached_media):
@@ -125,5 +125,5 @@ class FlamingoLMMixin(nn.Module):
     def clear_conditioned_layers(self):
         for flamingo_layer in self._get_decoder_layers():
             flamingo_layer.condition_media_x(None)
-            flamingo_layer.condition_media_location(None)
+            flamingo_layer.condition_media_locations(None)
             flamingo_layer.condition_use_cached_media(False)

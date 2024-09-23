@@ -31,33 +31,33 @@ class PerceiverAttention(nn.Module):
         self.norm_media = nn.LayerNorm(dim)
         self.norm_latents = nn.LayerNorm(dim)
 
-        self.q = nn.Linear(dim, hidden_dim, bias=False)
-        self.kv = nn.Linear(dim, hidden_dim*2, bias=False)
-        self.out = nn.Linear(hidden_dim, dim, bias=False)
+        self.to_q = nn.Linear(dim, hidden_dim, bias=False)
+        self.to_kv = nn.Linear(dim, hidden_dim*2, bias=False)
+        self.to_out = nn.Linear(hidden_dim, dim, bias=False)
 
 
-    # x: B x n x D (media)
-    # latents: B x n_l x D
+    # x: B x T x n x D (media)
+    # latents: B x T x n_l x D
     def forward(self, x, latents):
 
         x = self.norm_media(x)
         latents = self.norm_latents(latents)
 
-        B, n = x.shape[:2]
+        B, T, n = x.shape[:3]
         n_l = latents.shape[-2]
 
         x = torch.concat([x, latents], dim=-2)
 
-        query = self.q(latents)
-        key_value = self.kv(x)
+        query = self.to_q(latents)
+        key_value = self.to_kv(x)
         key, value = key_value.chunk(2, dim=-1)
 
-        query = query.reshape(B, n_l, self.heads,
-                              self.dim_head).permute(0, 2, 1, 3)
-        key = key.reshape(B, n + n_l, self.heads,
-                          self.dim_head).permute(0, 2, 1, 3)
-        value = value.reshape(B, n + n_l, self.heads,
-                              self.dim_head).permute(0, 2, 1, 3)
+        query = query.reshape(B, T, n_l, self.heads,
+                              self.dim_head).permute(0, 3, 1, 2, 4)
+        key = key.reshape(B, T, n + n_l, self.heads,
+                          self.dim_head).permute(0, 3, 1, 2, 4)
+        value = value.reshape(B, T, n + n_l, self.heads,
+                              self.dim_head).permute(0, 3, 1, 2, 4)
 
         attn = query @ key.transpose(-1, -2)
         
@@ -67,8 +67,8 @@ class PerceiverAttention(nn.Module):
         out = attn_s @ value
 
         print(out.shape, n_l)
-        out = out.permute(0, 2, 1, 3).reshape(B, n_l, -1)
-        out = self.out(out)
+        out = out.permute(0, 2, 3, 1, 4).reshape(B, T, n_l, -1)
+        out = self.to_out(out)
 
         return out
 
@@ -108,10 +108,12 @@ class PerceiverSampler(nn.Module):
         shape of x : B x T x F x v x D
         """
         
-        B, *_, D = x.shape
-        x = x.reshape(B, -1, D)
+        B, T, *_, D = x.shape
+        x = x.reshape(B, T, -1, D)
         
-        latents = self.latents.unsqueeze(0).repeat(B, 1, 1)
+        print(self.latents.shape)
+        latents = self.latents.view(1, 1, -1, D).repeat(B, T, 1, 1)
+        # print(latents.shape)
         
         for attn, ff in self.layers:
             latents = attn(x, latents) + latents
@@ -172,7 +174,7 @@ class MaskedCrossAttention(nn.Module):
         
         # Set all text tokens to attend the latest media
         if (use_cached_media):
-            text_time = text_time.max(dim=1, keepdim=True).repeat(1, T_text)
+            text_time = text_time.max(dim=1, keepdim=True)[0].repeat(1, T_text)
         
         media_time = media_time.repeat_interleave(n).reshape(1, 1, 1, n * T_img)
         text_time = text_time.reshape(B, 1, T_text, 1)
@@ -204,15 +206,15 @@ class GatedCrossAttentionBlock(nn.Module):
                  only_attend_immediate_media=True
                  ):
         super().__init__()
-        self.alpha_xattn = nn.Parameter(torch.zeros(1))
-        self.alpha_dense = nn.Parameter(torch.zeros(1))
-        self.cross_attn = MaskedCrossAttention(dim, dim_media, dim_head, heads, only_attend_immediate_media)
+        self.attn_gate = nn.Parameter(torch.zeros(1))
+        self.ff_gate = nn.Parameter(torch.zeros(1))
+        self.attn = MaskedCrossAttention(dim, dim_media, dim_head, heads, only_attend_immediate_media)
         self.ff = FeedForward(dim, ff_mult)
         
     def forward(self, x, media, media_locations, use_cached_media=False):
         
-        x = x + torch.tanh(self.alpha_xattn) * self.cross_attn(x, media, media_locations, use_cached_media)
-        x = x + torch.tanh(self.alpha_dense) * self.ff(x)
+        x = x + torch.tanh(self.attn_gate) * self.attn(x, media, media_locations, use_cached_media)
+        x = x + torch.tanh(self.ff_gate) * self.ff(x)
         
         return x
         

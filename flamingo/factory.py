@@ -19,7 +19,7 @@ def create_model_and_transforms(
     use_local_files=True,
     decoder_layers_attr_name=None,
     freeze_lm_embeddings=False,
-    cache_dir="/Users/pgarg/Work/DL-Implementations/cache",
+    cache_dir="/Users/pgarg/Work/hf_cache/Cache",
     **flamingo_kwargs):
     
     vision_encoder, _, image_processor = open_clip.create_model_and_transforms(

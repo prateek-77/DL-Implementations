@@ -74,7 +74,7 @@ class Flamingo(nn.Module):
         
         eos_token_id = kwargs.pop('eos_token_id', self.eoc_token_id)
         
-        output = self.lang_encoder(
+        output = self.lang_encoder.generate(
             input_ids = x,
             attention_mask = attention_mask,
             eos_token_id = eos_token_id,
@@ -90,17 +90,20 @@ class Flamingo(nn.Module):
     def _encode_and_condition_media(self, media):
         # media shape: B x T x F x C x H x W
         
-        B, T, F, C, H, W = media.shape[:-3]
+        B, T, F, C, H, W = media.shape
         
         media = media.reshape(-1, C, H, W)
         
         media = self.vision_encoder(media)[1] # (B T F) x v x D
-        v, D = media.shape[:-2]
+        # print(media.shape)
+        v, D = media.shape[-2:]
         media = media.reshape(B, T, F, v, D)
         
-        media = self.perceiver(media)
+        print(media.shape)
         
-        for layer in self.lang_encoder._get_decoder_layers:
+        media = self.perceiver(media) # B x T x n x D
+        
+        for layer in self.lang_encoder._get_decoder_layers():
             layer.condition_media_x(media)
 
     def _condition_media_locations(self, input_ids):
