@@ -15,16 +15,16 @@ class FlamingoLayer(nn.Module):
         self.gated_cross_attn_layer = gated_cross_attn_layer
         self.decoder_layer = decoder_layer
         
-        self.media_x = None
+        self.media = None
         self.media_locations = None
         
         self.use_cached_media = False
         
     def is_conditioned(self):
-        return self.media_x is not None and self.media_locations is not None
+        return self.media is not None and self.media_locations is not None
         
-    def condition_media_x(self, media_x):
-        self.media_x = media_x
+    def condition_media(self, media):
+        self.media = media
         
     def condition_media_locations(self, media_locations):
         self.media_locations = media_locations
@@ -38,7 +38,7 @@ class FlamingoLayer(nn.Module):
             if (not self.is_conditioned()):
                 raise ValueError("Condition the FlamingoLayer with media and media locations first")
             
-            x = self.gated_cross_attn_layer(x, self.media_x, self.media_locations, use_cached_media=self.use_cached_media)
+            x = self.gated_cross_attn_layer(x, self.media, self.media_locations, use_cached_media=self.use_cached_media)
             
         x = self.decoder_layer(x, attention_mask, **decoder_layer_kwargs)
         
@@ -60,7 +60,6 @@ class FlamingoLMMixin(nn.Module):
     def _set_decoder_layers(self, value):
         setattr_recursively(self, self.decoder_layers_attr_name, value)
     
-    # dim_head, heads for GCAB is fixed!!
     def init_flamingo(self, 
                       media_token_id, 
                       x_dim_size, 
@@ -98,16 +97,16 @@ class FlamingoLMMixin(nn.Module):
     def forward(self, input_ids, attention_mask, **kwargs):
         
         media_locations = input_ids == self.media_token_id
-        
         use_cached_media_locations = False
         
+        # Important set of flags
         if (self._use_cached_media
-            and self.is_conditioned() # Important flag for caching decision in subsequent passes of generate().
-            and not media_locations.any()):
+            and self.is_conditioned() # With HF generate, media is conditioned only for first pass.
+            and not media_locations.any()): # For HF generate, True only for the first pass [KV caching], no new media tokens
             use_cached_media_locations = True
         
         for flamingo_layer in self._get_decoder_layers():
-            if (not use_cached_media_locations):
+            if (not use_cached_media_locations): # Line 104
                 flamingo_layer.condition_media_locations(media_locations)
             flamingo_layer.condition_use_cached_media(use_cached_media_locations)
             
@@ -124,6 +123,6 @@ class FlamingoLMMixin(nn.Module):
     
     def clear_conditioned_layers(self):
         for flamingo_layer in self._get_decoder_layers():
-            flamingo_layer.condition_media_x(None)
+            flamingo_layer.condition_media(None)
             flamingo_layer.condition_media_locations(None)
             flamingo_layer.condition_use_cached_media(False)

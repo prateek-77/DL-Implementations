@@ -36,20 +36,20 @@ class PerceiverAttention(nn.Module):
         self.to_out = nn.Linear(hidden_dim, dim, bias=False)
 
 
-    # x: B x T x n x D (media)
-    # latents: B x T x n_l x D
-    def forward(self, x, latents):
+    # media: B x T x n_i x D [n_i = number of image tokens]
+    # latents: B x T x n_l x D [n_l = number of latents]
+    def forward(self, media, latents):
 
-        x = self.norm_media(x)
+        media = self.norm_media(media)
         latents = self.norm_latents(latents)
 
-        B, T, n = x.shape[:3]
+        B, T, n = media.shape[:3]
         n_l = latents.shape[-2]
 
-        x = torch.concat([x, latents], dim=-2)
+        media = torch.concat([media, latents], dim=-2)
 
         query = self.to_q(latents)
-        key_value = self.to_kv(x)
+        key_value = self.to_kv(media)
         key, value = key_value.chunk(2, dim=-1)
 
         query = query.reshape(B, T, n_l, self.heads,
@@ -61,19 +61,18 @@ class PerceiverAttention(nn.Module):
 
         attn = query @ key.transpose(-1, -2)
         
-        # Softmax Stability
+        # Softmax Stability (for very large values)
         attn = attn - torch.amax(attn, dim=-1, keepdim=True).detach()
         attn_s = F.softmax(attn, dim=-1) / self.scale
         out = attn_s @ value
 
-        print(out.shape, n_l)
         out = out.permute(0, 2, 3, 1, 4).reshape(B, T, n_l, -1)
         out = self.to_out(out)
 
         return out
 
-# Don't allow frames and time steps
-# Current Implementation has frames=1, time steps=1 [Only supports images]
+# Current Implementation only works for images
+# Frames = 1
 
 class PerceiverSampler(nn.Module):
 
@@ -103,20 +102,22 @@ class PerceiverSampler(nn.Module):
         self.norm = nn.LayerNorm(dim)
         
 
-    def forward(self, x):
+    def forward(self, media):
         """
-        shape of x : B x T x F x v x D
+        shape of media : B x T x F x v x D
+        v = count of image tokens form OpenAI CLIP encoder
+        T = number of images
         """
         
-        B, T, *_, D = x.shape
-        x = x.reshape(B, T, -1, D)
+        B, T, *_, D = media.shape
+        media = media.reshape(B, T, -1, D)
         
         print(self.latents.shape)
         latents = self.latents.view(1, 1, -1, D).repeat(B, T, 1, 1)
         # print(latents.shape)
         
         for attn, ff in self.layers:
-            latents = attn(x, latents) + latents
+            latents = attn(media, latents) + latents
             latents = ff(latents) + latents
             
         return self.norm(latents)
@@ -146,10 +147,13 @@ class MaskedCrossAttention(nn.Module):
         
         self.scale = math.sqrt(dim_head)
     
-    # x shape: B x T_text x D_t
-    # media shape: B x T_img x n x D_media
-    # We use cached media during generation of new tokens:
-    # we don't have media tokens during autoregressive generation
+    # x shape: B x T_text x D_t [language]
+    # media shape: B x T_img x n x D_media [media]
+    # We use cached media during generation of new tokens (HuggingFace generate()):
+    # We don't have media tokens during autoregressive generation
+    # This is due to KV caching, where only the new query tokens are input autoregressively,
+    # while the key and value tensors from previous steps are reused. 
+    # The new query tokens are text tokens only.
     
     def forward(self, x, media, media_locations, use_cached_media=False):
         
@@ -163,22 +167,27 @@ class MaskedCrossAttention(nn.Module):
         key_value = self.to_kv(media)
         key, value = key_value.chunk(2, dim=-1)
         
+        # query from text input
         query = query.reshape(B, T_text, self.heads, self.dim_head).permute(0, 2, 1, 3)
+        
+        # key value from conditioned media
         key = key.reshape(B, T_img * n, self.heads, self.dim_head).permute(0, 2, 1, 3)
         value = value.reshape(B, T_img * n, self.heads, self.dim_head).permute(0, 2, 1, 3)
         
-        attn = query @ key.transpose(-2, -1) # B x h x T_text x (T_img * n)
+        attn = query @ key.transpose(-2, -1) # (B x h x T_text x (T_img * n))
         
-        media_time = torch.arange(T_img, device=x.device) + 1 # T_img
-        text_time = media_locations.cumsum(dim=1) # B x T_text
+        media_time = torch.arange(T_img, device=x.device) + 1 # (T_img,)
+        text_time = media_locations.cumsum(dim=1) # (B x T_text)
         
-        # Set all text tokens to attend the latest media
+        # Set all text tokens to attend the latest media only (useful for HF generate)
         if (use_cached_media):
             text_time = text_time.max(dim=1, keepdim=True)[0].repeat(1, T_text)
         
         media_time = media_time.repeat_interleave(n).reshape(1, 1, 1, n * T_img)
         text_time = text_time.reshape(B, 1, T_text, 1)
         
+        # Create an attention mask to allow text tokens to attend
+        # their immediately preceding media tokens.
         mask_text_img = media_time == text_time
         
         attn.masked_fill(~mask_text_img, -torch.inf)
@@ -232,6 +241,3 @@ if __name__ == "__main__":
     
     GCA = GatedCrossAttentionBlock(120, 120, 10, 6, True)
     GCA(x, y, z)
-
-
-# input tensor has shape B x T x f x v x D

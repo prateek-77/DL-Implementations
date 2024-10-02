@@ -2,13 +2,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from helper import PerceiverSampler
 
-# TODO: Check Gradient Checkpointing
-
 class Flamingo(nn.Module):
     
     def __init__(self,
                  vision_encoder, # OpenAI CLIP encoder
-                 lang_encoder, # Assume already extended with LMMixin
+                 lang_encoder, # Assume already extended with LMMixin in factory
                  media_token_id,
                  eoc_token_id,
                  media_dim,
@@ -23,7 +21,7 @@ class Flamingo(nn.Module):
         self.perceiver = PerceiverSampler(dim=media_dim)
         
         self.lang_encoder = lang_encoder
-        self.x_dim = lang_encoder.config.hidden_size # Handle MPT
+        self.x_dim = lang_encoder.config.hidden_size
         
         self.lang_encoder.init_flamingo(media_token_id, 
                                         self.x_dim, 
@@ -45,7 +43,8 @@ class Flamingo(nn.Module):
             assert self.lang_encoder.is_conditioned()
         
         else:
-            self._encode_and_condition_media(media)
+            # Attach media to all the Flamingo layers without having to pass explicitly in forward
+            self._encode_and_condition_media(media) 
             self._condition_media_locations(x)
             
         output = self.lang_encoder(
@@ -67,7 +66,7 @@ class Flamingo(nn.Module):
                  attention_mask = None, 
                  **kwargs):
         
-        # Add beam search support
+        # TODO: Add beam search
         
         self._encode_and_condition_media(media)
         self.lang_encoder._use_cached_media = True
@@ -88,23 +87,21 @@ class Flamingo(nn.Module):
         
     
     def _encode_and_condition_media(self, media):
-        # media shape: B x T x F x C x H x W
         
         B, T, F, C, H, W = media.shape
         
         media = media.reshape(-1, C, H, W)
         
         media = self.vision_encoder(media)[1] # (B T F) x v x D
-        # print(media.shape)
         v, D = media.shape[-2:]
         media = media.reshape(B, T, F, v, D)
         
-        print(media.shape)
+        # print(media.shape)
         
-        media = self.perceiver(media) # B x T x n x D
+        media = self.perceiver(media) # B x T x n_l x D
         
         for layer in self.lang_encoder._get_decoder_layers():
-            layer.condition_media_x(media)
+            layer.condition_media(media)
 
     def _condition_media_locations(self, input_ids):
         

@@ -1,5 +1,3 @@
-
-
 def extend_instance(obj, mixin_class):
     base_class = obj.__class__
     base_class_name = base_class.__name__

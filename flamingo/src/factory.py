@@ -8,8 +8,6 @@ from flamingo import Flamingo
 from flamingo_lm import FlamingoLMMixin
 from utils import extend_instance
 
-# Understand HF generate and caching
-
 def create_model_and_transforms(
     clip_vision_encoder_path,
     clip_vision_encoder_pretrained,
@@ -36,6 +34,7 @@ def create_model_and_transforms(
         trust_remote_code=True,
         cache_dir=cache_dir
         )
+    
     tokenizer.add_special_tokens({'additional_special_tokens': ['<|endofchunk|>', '<media>']})
     
     if tokenizer.pad_token is None:
@@ -58,7 +57,7 @@ def create_model_and_transforms(
     
     lang_encoder.set_decoder_layers_attr_name(decoder_layers_attr_name)
     
-    # Why do we take the last token
+    # Last token is the most relevant identifier
     media_token_id = tokenizer.encode("<media>")[-1]
     eoc_token_id = tokenizer.encode("<|endofchunk|>")[-1]
     
@@ -70,8 +69,8 @@ def create_model_and_transforms(
                         cross_attn_every_n_layers,
                         gradient_checkpointing=False)
     
+    # Implementation only supports inference currently
     flamingo.requires_grad_(False)
-    
     return flamingo, image_processor, tokenizer
 
 def get_decoder_layers_attr_name(lang_encoder):
