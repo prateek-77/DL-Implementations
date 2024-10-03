@@ -1,6 +1,6 @@
 # Flamingo
 
-This repository contains my implementation of Flamingo, a Vision-Language Model (VLM). Inspired by [OpenFlamingo](OpenFlamingo), this model integrates both visual and language data to perform tasks like image captioning and visual question answering (VQA).
+This repository contains my implementation of Flamingo, a Vision-Language Model (VLM). Inspired by [OpenFlamingo](https://arxiv.org/abs/2308.01390), this model integrates both visual and language data to perform tasks like image captioning and visual question answering (VQA).
 
 Currently, the repository supports only inference using pretrained weights with image conditioning.
 
